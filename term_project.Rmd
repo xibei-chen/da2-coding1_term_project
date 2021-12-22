@@ -1,0 +1,461 @@
+---
+title: "Final Term Project - Racial Disparities at Police Stops in the US"
+author: "Xibei Chen"
+date: '21st December 2021'
+output: pdf_document
+header-includes: |
+  \usepackage{titling}
+  \usepackage{float}
+  \setlength{\droptitle}{-5em}
+  \usepackage{lscape}
+  \newcommand{\blandscape}{\begin{landscape}}
+  \newcommand{\elandscape}{\end{landscape}}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+```{r, include=FALSE}
+# Clean environment
+rm(list=ls())
+
+# Load packages
+library(tidyverse)
+library(xtable)
+library(haven)
+library(cowplot)
+library(lspline)
+library(data.table)
+library(mfx)
+library(margins)
+library(stargazer)
+library(psych)
+library(estimatr)
+library(huxtable)
+library(modelsummary)
+library(fixest)
+library(RColorBrewer)
+library(kableExtra)
+library(ggpubr)
+library(gridExtra)
+```
+
+
+## Introduction
+The aim of this project is to take a closer look into racial disparities at police stops in the US, exploring how other variables might effect the association between probability of getting searched and driver's race. Racial discrimination has always been a topic in the US. Especially after the murder of George Floyd in May 2020, Black Lives Matter movement gained much more international attention. The data set that is used for this project is from [The Stanford Open Policing Project](https://openpolicing.stanford.edu/data/). There are already some findings about the racial disparities regarding stop rates, search decisions, etc. In this project I am specifically interested in the disparities between black and white drivers, and I will particularly focus on how other variables such as driver's gender and age, officer's race and gender would effect the association between the probability of getting searched and driver's race at police stops, with the hope that I might be able to find something new than what has already been done.
+
+## Data
+To achieve the aim of this project, I specifically picked the data set for Louisville, where data for all the other control variables that I am interested in are also available. The data set includes data of all the traffic stops from 2015-01-01 to 2018-01-28 in Louisville, KY. I did some data cleaning and munging to filter out all the NA values, focus only on sample with drivers either black or white, categorize officers as white and non-white and consider both *frisk performed* and *search conducted* as *get searched*.
+
+
+```{r, include=FALSE}
+# Import data: police stops, 2015 Jan - 2018 Jan, Louisville
+df_import <- read_csv('https://media.githubusercontent.com/media/xibei-chen/da2-coding1_term_project/main/data/ky_louisville_2020_04_01.csv')
+
+# Data cleaning and munging 
+# Select needed variables, filter out NA values
+df <- df_import %>% dplyr::select(subject_race, subject_sex, subject_age, officer_race, officer_sex, frisk_performed, search_conducted) %>% drop_na()
+
+# Create a binary variable as y variable: get_searched = 1 if frisk_performed or search_conducted is TRUE, 0 otherwise. 
+df <- df %>% mutate(get_searched = ifelse(df$frisk_performed=='TRUE', 1, ifelse(df$search_conducted=='TRUE',1, 0))) %>% dplyr::select(-frisk_performed, -search_conducted)
+
+# Check race variables
+table(df$subject_race)
+table(df$officer_race)
+
+# Drop other and unknown race for subject and officer
+df<- df %>% filter(subject_race != 'other', subject_race!='unknown', officer_race!='other')
+
+# Create dummy variables
+df <- df %>% mutate(subject_female=as.numeric(subject_sex=='female')) %>%
+            mutate(officer_female=as.numeric(officer_sex=='female')) %>%
+            mutate(subject_b=as.numeric(subject_race=='black'),
+                   subject_h=as.numeric(subject_race=='hispanic'),
+                   subject_ap=as.numeric(subject_race=='asian/pacific islander'),
+                   subject_w=as.numeric(subject_race=='white'),
+                   subject_nw=as.numeric(subject_race!='white')) %>% 
+            mutate(officer_w=as.numeric(officer_race=='white'),
+                   officer_nw=as.numeric(officer_race!='white'))
+
+# Focus my project on black drivers vs white drivers, and white officers vs non white officers
+dfb <- df %>% mutate(officer_race1 = ifelse(officer_race=='white', 'white','non-white')) %>% 
+             filter(subject_race=='black' | subject_race=='white')
+```
+
+```{r, echo=FALSE}
+# Descriptive statistics
+# Create functions for P95 and P05
+P95 <- function(x){quantile(x,0.95,na.rm=T)}
+P05 <- function(x){quantile(x,0.05,na.rm=T)}
+
+datasummary( (`Probability of Getting Searched` = get_searched) + 
+               (`Race of Drivers` = subject_b) +
+               (`Gender of Drviers` = subject_female ) + 
+               (`Age of Drivers` = subject_age ) + 
+               (`Race of Officers` = officer_nw) + 
+               (`Gender of Officers` = officer_female) ~
+               Mean + Median + SD + Min + Max + P05 + P95, 
+             data = dfb ,
+             title = 'Descriptive statistics') %>% 
+  kable_styling(latex_options = c("HOLD_position","scale_down"))
+```
+The number of observations in my sample is `r sum(!is.na(dfb$subject_race))` for all the key variables. From the descriptive statistics we can also see that for drivers 30% are black whereas 70% are white, 38% are female whereas 62% are male, the mean age is around 37 years old, for police officers 23% are non-white whereas 77% are white, 3% are female whereas 97% are male. 
+
+\newpage
+* Check distributions of key variables
+```{r, echo=FALSE, fig.align='center', fig.pos="H"}
+# Check distributions of variables
+# Distribution of variable - whether get searched
+p1 <- ggplot( data = dfb, aes( x = as.factor(get_searched)) )  +
+  geom_bar(color='#2a9d8f',fill='#3cc5a3', alpha=0.5) +
+  theme_minimal() +
+  labs( x = NULL, y = NULL,
+        title = 'Distribution of Drivers Getting Searched (1)') +
+  theme( panel.grid.minor.x = element_blank(), 
+         plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) ) +
+  theme( legend.position = "none" ) 
+
+# Distribution of variable - driver's race
+p2 <- ggplot( data = dfb, aes( x = subject_race) )  +
+  geom_bar(color='#2a9d8f',fill='#3cc5a3', alpha=0.5) +
+  theme_minimal() +
+  labs( x = NULL, y = NULL,
+        title = 'Distribution of Drivers by Race') +
+  theme( panel.grid.minor.x = element_blank(), 
+         plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) ) +
+  theme( legend.position = "none" )
+
+# Distribution of variable - driver's gender
+p3 <- ggplot( data = dfb, aes( x = subject_sex) )  +
+  geom_bar(color='#2a9d8f',fill='#3cc5a3', alpha=0.5) +
+  theme_minimal() +
+  labs( x = NULL, y = NULL,
+        title = 'Distribution of Drivers by Gender') +
+  theme( panel.grid.minor.x = element_blank(), 
+         plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) ) +
+  theme( legend.position = "none" )
+
+# Distribution of variable - driver's age
+p4 <- ggplot( data = dfb, aes( x = subject_age ) ) +
+  geom_histogram(color='#2a9d8f', fill='#3cc5a3', alpha=0.5) +
+  theme_minimal() +
+  labs( x=NULL, y=NULL,
+        title= 'Distribution of Drivers by Age' ) +
+  theme( panel.grid.minor.x = element_blank(), 
+         plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) )
+
+# Distribution of variable - officer's race
+p5 <- ggplot( data = dfb, aes( x = officer_race1) )  +
+  geom_bar(color='#2a9d8f',fill='#3cc5a3', alpha=0.5) +
+  theme_minimal() +
+  labs( x = NULL, y = NULL,
+        title = 'Distribution of Officers by Race') +
+  theme( panel.grid.minor.x = element_blank(), 
+         plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) ) +
+  theme( legend.position = "none" )
+
+# Distribution of variable - officer's gender
+p6 <- ggplot( data = dfb, aes( x = officer_sex) )  +
+  geom_bar(color='#2a9d8f',fill='#3cc5a3', alpha=0.5) +
+  theme_minimal() +
+  labs( x = NULL, y = NULL,
+        title = 'Distribution of Officers by Gender') +
+  theme( panel.grid.minor.x = element_blank(), 
+         plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) ) +
+  theme( legend.position = "none" ) 
+
+association_figs <- ggarrange(p1, p2, p3, p4, p5, p6,
+                              hjust = -0.6,
+                              ncol = 2, nrow = 3)
+association_figs
+```
+
+## Models and Interpretation
+The pattern of association between y and the only one continuous variable subject_age (see graph in Appendix) seems close to be linear, so there is no need to use splines or polynomials. Therefore, I start building regression models.
+```{r, include=FALSE}
+# reg1: NO control, simple linear regression with driver's race
+reg1 <- feols( get_searched ~ subject_b, data = dfb , vcov = 'hetero' )
+
+# reg2: Add driver's gender as control
+reg2 <- feols( get_searched ~ subject_b + subject_female , data = dfb , vcov = 'hetero' )
+# negative association
+
+# reg3: Add interaction term of drivers race and gender 
+reg3 <- feols( get_searched ~ subject_b + subject_female + subject_b*subject_female, data = dfb , vcov = 'hetero' )
+# when drivers gender is female, we expect the disadvantage for black driver to be lower
+
+# reg4: Add driver's age as control
+reg4 <- feols( get_searched ~ subject_b + subject_female + subject_age , data = dfb , vcov = 'hetero' )
+# slight negative association
+
+# reg5: Add interaction term of drivers race and age
+reg5 <- feols( get_searched ~ subject_b + subject_female + subject_age + subject_b*subject_age, data = dfb , vcov = 'hetero' )
+# driver's age doesnt effect much the association between probability of getting searched and drivers race
+
+# reg6: Add officer's race as control
+reg6 <- feols( get_searched ~ subject_b + subject_female + officer_nw, data = dfb , vcov = 'hetero' )
+
+# reg7: Add interaction term of drivers race and officers race
+reg7 <- feols( get_searched ~ subject_b + subject_female + officer_nw + subject_b*officer_nw, data = dfb , vcov = 'hetero' )
+# when officers race is non-white, we expect the disadvantage for black driver to be lower
+
+# reg8: Add officer's gender as control
+reg8 <- feols( get_searched ~ subject_b + subject_female + officer_nw + officer_female, data = dfb , vcov = 'hetero' )
+# quite significant positive association
+
+# reg9: Add interaction term of drivers race and officers gender
+reg9 <- feols( get_searched ~ subject_b + subject_female +  officer_nw + + officer_female + subject_b*officer_female, data = dfb , vcov = 'hetero' )
+# when officers gender is female, we expect the disadvantage for black driver to be higher
+```
+
+```{r, echo=FALSE, fig.pos="H"}
+# Models summary
+varname_report <- c("(Intercept)" = "Intercept",
+                    "subject_b" = "black driver",
+                    "subject_female" = "female driver",
+                    "subject_age2" = "age of driver",
+                    "officer_nw" = "non-white officer",
+                    "officer_female" = "female officer")
+
+kable( etable( reg1, reg2, reg3, reg4, reg5,
+               title = 'Probability of Getting searched',
+               dict = varname_report,
+               se.below = T,
+               coefstat = 'se',
+               fitstat = c('n','r2'),
+               se.row = F,
+               depvar = F ) , 
+       col.names = c('(1)','(2)','(3)','(4)','(5)'),
+       "latex", booktabs = TRUE,
+       caption = 'Associations between probability of getting searched and driver race') %>% kable_styling(latex_options = c("hold_position","scale_down"))
+
+```
+
+\newpage
+```{r, echo=FALSE, fig.pos="H"}
+kable( etable( reg6, reg7, reg8, reg9,
+               title = 'Probability of Getting searched',
+               dict = varname_report,
+               se.below = T,
+               coefstat = 'se',
+               fitstat = c('n','r2'),
+               se.row = F,
+               depvar = F ) , 
+       col.names = c('(6)','(7)','(8)','(9)'),
+       "latex", booktabs = TRUE,
+       caption = 'Associations between probability of getting searched and driver race') %>% kable_styling(latex_options = c("hold_position","scale_down"))
+
+```
+
+
+- from Model (2) we can infer that when controlling on driver's race, we expect female drivers to be around 3.7% less likely to get searched at police stops than male drivers on average; from Model (3) we can infer from the interaction term between driver's race and gender that when driver's gender is female, we expect the disadvantage for black driver regarding probability of getting searched to be lower by around 5.9%.
+- from Model (4) we can infer that there is no statistically significant association between probability of getting searched and driver's age; from Model (5) we can also infer that basically driver's age does not effect much the association between probability of getting searched and drivers race.
+- from Model (6) we can infer that when controlling on drivers race and gender, we expect the probability for drivers to get searched to be around 1.4% lower when the officer is non-white than when the officer is white; from Model (7) we can also infer from the interaction term between driver's race and officer's race that when officer is non-white, we expect the disadvantage for black driver regarding probability of getting searched to be lower by around 1.1%.
+- from Model (8) we can infer that when controlling on driver's race and gender and officer's race, we expect the probability for drivers to get searched to be around 10.7% higher when officer is female than when officer is male; from Model (9) even though the coefficient for interaction term between driver's race and officer's gender is not zero, however the standard error is quite high, and the 95% confidence interval includes zero, it might be the result of very low relative frequency of female officers. Therefore we cannot conclude that officer being female has any effect on the disadvantage for black driver regarding probability of getting searched.
+
+My preferred model is Model(8), as driver's age has almost no association with probability of getting searched.
+```{r, include=FALSE}
+# Name the coefficients for pretty output
+alpha  <- round( reg8$coeftable[1,1] , 2 )
+b1 <- round( reg8$coeftable[2,1] , 2 )
+```
+
+probability of getting searched = $`r alpha`$ $+$ $`r b1`$ $(race=black)$ $+ \delta Z$
+
+where $Z$ are standing for the controls, which includes controlling for driver's gender, officer's race and officer's gender. Interpret the coefficients:
+
+- Interpret alpha: when the officer is male and white, and the driver is male and white, we expect the probability of getting searched to be around 5% on average;
+- Interpret beta: when controlling on driver's gender, officer's gender and race, black drivers are expected to be around 3% more likely to get searched than white drivers on average.
+
+\newpage
+Besides, based on the heteroskedastic robust standard errors, these results are statistically different from zero. To show that, I have run a two-sided hypothesis test:
+$$H_0:=\beta_1 = 0$$
+$$H_A:=\beta_1 \neq 0$$
+I have the t-statistic rounded as `r round( reg8$coeftable[2,3] , 2 )` and the p-value rounded as `r round( reg8$coeftable[2,4] , 2 )`, which confirms my conclusion.
+
+## Modelling Probabilities (see graph and summary table details in Appendix)
+
+```{r, include=FALSE}
+# Create a model formula
+model_formula <- formula( get_searched ~  subject_b + subject_female + officer_nw + officer_female)
+
+# Model 1)  LPM
+lpm <-feols( model_formula , data=dfb, vcov = 'hetero')
+# LPM predicted probabilities 
+dfb$pred_lpm <- predict(lpm)
+
+# Model 2)  Logit
+logit <- feglm( model_formula , data=dfb, family = binomial( link = "logit" ) )
+# Logit predicted probabilities 
+dfb$pred_logit <- predict(logit, type="response")
+# Logit marginal differences
+logit_marg <- logitmfx(model_formula, data=dfb, atmean=FALSE, robust=T)
+
+# Model 3)  Probit
+probit <- feglm(model_formula, data=dfb, family=binomial(link="probit"))
+# Probit predicted probabilities         
+dfb$pred_probit<- predict(probit, type="response") 
+# Probit marginal differences 
+probit_marg <- probitmfx(model_formula, data=dfb, atmean=FALSE, robust=T)
+```
+Since the dependent variable is probability, I considered multiple ways of conducting modelling probabilities, such as LPM, Logit and Probit. Logit is slightly better than LPM and probit regarding goodness of fit as its Brier score is the smallest. There is also no distinguishable difference between probability models according to pseudo R2 and log-loss, plotted predicted probabilities, and calibration curves. Therefore, for uncovering general patterns, LPM would work fine.
+
+## External Validity (Robustness Check)
+```{r, echo=FALSE, fig.pos="H"}
+dfwa <- read_csv('https://media.githubusercontent.com/media/xibei-chen/da2-coding1_term_project/main/data/wa_statewide.csv')
+# reg10: preferred model (8) applied to Washington statewide
+reg10 <- feols( get_searched ~ subject_b + subject_female + officer_nw + officer_female, data = dfwa , vcov = 'hetero' )
+
+kable( etable( reg8, reg10,
+               title = 'Probability of Getting searched',
+               dict = varname_report,
+               se.below = T,
+               coefstat = 'se',
+               fitstat = c('n','r2'),
+               se.row = F,
+               depvar = F ) , 
+       col.names = c('Louisville, 2015 Jan-2018 Jan','WA Statewide, 2009 Jan-2015 Dec'),
+       "latex", booktabs = TRUE,
+       caption = 'Associations between probability of getting searched and driver race') %>% kable_styling(latex_options = c("hold_position","scale_down"))
+```
+
+The second data set I used includes data of all the traffic stops with drivers being either black or white from 2009-01-01 to 2015-12-31 in Washington Statewide. The slope coefficient for driver's race is similar to our model for Louisville previously. This suggests that for other time intervals and other regions in the US, the external validity of the model is quite high, we might expect similar slope coefficient for driver's race.
+
+## Conclusion
+In general, unsurprisingly when controlling on driver's gender, officer's gender and race, black drivers are expected to be around 3% more likely to get searched than white drivers on average. What's new for me is, we expect the disadvantage for black drivers regarding probability of getting searched to be lower when the driver is female instead of male and when officer is non-white instead of white, whereas driver's age and officer's gender have no statistically significant effect on the matter. Last but not least, within the US, it is assumed that the external validity of the preferred regression model to be quite high, we might expect similar slope coefficient for driver's race for other regions in the US.
+
+\newpage
+## Appendix
+
+```{r, echo=FALSE, fig.width=5, fig.height = 4, fig.align='center', fig.pos="H"}
+# Check pattern of association between y and continuous variable subject_age
+ggplot( data = dfb, aes( x = subject_age, y = get_searched ) ) +
+  geom_smooth( method = "loess", se=F, color = '#3cc5a3', size = 1.5 ) +
+  scale_y_continuous( labels = scales::percent ) +
+  theme_minimal() +
+  labs( x = "Age of Drivers", y = "Probability of Getting Searched", title = "Association between Getting Searched and Drivers Age") +
+  theme( plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) )
+# this association seems to be quite close to linear, without significant slope change, no need for splines
+```
+*Check pattern of association between y and the only one continuous variable subject_age*  
+
+```{r, echo=FALSE, warning=FALSE, fig.width=6, fig.height = 3, fig.align="center", fig.pos="H"}
+ggplot(data = dfb) +
+        geom_point(aes(x=pred_lpm, y=pred_probit, color="Probit"), size=0.5) +
+        geom_point(aes(x=pred_lpm, y=pred_logit,  color="Logit"), size=0.5) +
+        geom_line(aes(x=pred_lpm, y=pred_probit, color="Probit"), size=0.3) +
+        geom_line(aes(x=pred_lpm, y=pred_logit,  color="Logit"), size=0.3) +
+        geom_line(aes(x=pred_lpm, y=pred_lpm,    color="45 degree line"), size=0.4) +
+        labs(x = "Predicted probability of getting searched (LPM)", y="Predicted probability")+
+        theme_minimal()+
+        theme(legend.position=c(0.55,0.08),
+              legend.direction = "horizontal",
+              legend.text = element_text(size = 4))+
+        scale_color_manual(name = "", values=c("#9caaa9", "#ff8756","#3cc5a3"))
+        
+```
+*Plot predicted probabilities*
+
+\newpage
+
+```{r, echo=FALSE, fig.pos="H"}
+# Create model summary table
+pmodels <- list(lpm, logit, logit_marg, probit, probit_marg)
+
+msummary( pmodels ,
+          fmt="%.3f",
+          gof_omit = 'DF|Deviance|Log.Lik.|F|R2 Adj.|AIC|BIC|R2|PseudoR2|Std.Errors',
+          stars=c('*' = .05, '**' = .01))
+```
+*Summary table of coefficients of different models (1.LPM,  2.Logit,  3.Logit Marginal,  4.Probit,  5.Probit Marginal)*  
+
+
+```{r, echo=FALSE, warning=FALSE, fig.pos="H"}
+# Compare goodness of fit with alternative statistics
+fitstat_register("brier", function(x){mean(x$residual^2)}, "Brier score")
+fitstat_register("logloss", function(x){
+        log_id <- !is.na( x$fitted.values ) & x$fitted.values != 1 & x$fitted.values != 0
+        y   <- x$fitted.values[ log_id ] + x$residuals[ log_id ]
+        lp  <- log( x$fitted.values[log_id] )
+        lnp <- log( 1 - x$fitted.values[log_id] )
+        nobs <- sum( log_id )
+        return( 1 / nobs * sum( y * lp + ( 1 - y ) * lnp ) )
+}, "log-loss")
+
+dt <- etable( lpm, logit, probit , drop = "factor|lsplin|exerc",fitstat = ~ r2 + brier + pr2 + logloss )
+
+kable(dt) %>% 
+  kableExtra::kable_styling(bootstrap_options="condensed", latex_options = "hold_position")
+```
+*Summary table of statistics of goodness of fit (LPM, Logit, Probit)*  
+
+```{r, echo=FALSE, warning=FALSE, fig.width=10, fig.height = 3, fig.align="center", fig.pos="H"}
+# Create a function to generate calibration plot
+create_calibration_plot <- function(data, file_name, prob_var, actual_var, y_lab = "Actual event probability" , n_bins = 10, breaks = NULL) {
+        
+        if (is.null(breaks)) {
+                breaks <- seq(0,0.3,length.out = n_bins + 1)
+        }
+        
+        binned_data <- data %>%
+                mutate(
+                        prob_bin = cut(!!as.name(prob_var), 
+                                       breaks = breaks,
+                                       include.lowest = TRUE)
+                ) %>%
+                group_by(prob_bin, .drop=FALSE) %>%
+                summarise(mean_prob = mean(!!as.name(prob_var)), mean_actual = mean(!!as.name(actual_var)), n = n())
+        
+        p <- ggplot(data = binned_data) +
+                geom_line(aes(mean_prob, mean_actual), color="#3cc5a3", size=0.6, show.legend = TRUE) +
+                geom_point(aes(mean_prob,mean_actual), color = "#3cc5a3", size = 1, shape = 16, alpha = 0.7, show.legend=F, na.rm = TRUE) +
+                geom_segment(x=min(breaks), xend=max(breaks), y=min(breaks), yend=max(breaks), color="#ee6c4d", size=0.3) +
+                theme_minimal() +
+                labs(x= "Predicted event probability",
+                     y= y_lab) +
+                coord_cartesian(xlim=c(0,0.3), ylim=c(0,0.3))+
+                expand_limits(x = 0.01, y = 0.01) +
+                scale_y_continuous(expand=c(0.01,0.01),breaks=c(seq(0,0.3,0.1))) +
+                scale_x_continuous(expand=c(0.01,0.01),breaks=c(seq(0,0.3,0.1))) 
+        
+        p
+}
+
+breaksat<- c(0,seq(0.2,0.85,0.05),1.05)
+
+# LPM calibration curves
+lpm_curve<- dfb %>% 
+        ungroup() %>%
+        create_calibration_plot( 
+                file_name = "calib-lpm", 
+                prob_var = "pred_lpm", 
+                actual_var = "get_searched"
+                # n_bins = 10
+
+        )
+
+# Logit calibration curves
+logit_curve <- dfb %>% 
+        ungroup() %>%
+        create_calibration_plot( 
+                file_name = "calib-logit", 
+                prob_var = "pred_logit", 
+                actual_var = "get_searched"
+        )
+
+# Probit calibration curves
+probit_curve <- dfb %>% 
+        ungroup() %>%
+        create_calibration_plot( 
+                file_name = "calib-probit", 
+                prob_var = "pred_probit", 
+                actual_var = "get_searched"
+              
+        )
+
+# Arrange the curve graphs together
+grid.arrange(lpm_curve, logit_curve, probit_curve, ncol=3)
+```
+*Calibration curves (LPM, Logit, Probit)*
