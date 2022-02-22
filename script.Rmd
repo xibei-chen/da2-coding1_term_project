@@ -1,5 +1,5 @@
 ---
-title: "Final Term Project - Racial Disparities at Police Stops in the US"
+title: "Racial Disparities at Police Stops in the US"
 author: "Xibei Chen"
 date: '21st December 2021'
 output: pdf_document
@@ -52,7 +52,7 @@ To achieve the aim of this project, I specifically picked the data set for Louis
 
 ```{r, include=FALSE}
 # Import data: police stops, 2015 Jan - 2018 Jan, Louisville
-df_import <- read_csv('https://media.githubusercontent.com/media/xibei-chen/da2-coding1_term_project/main/data/ky_louisville_2020_04_01.csv')
+df_import <- read_csv('https://media.githubusercontent.com/media/xibei-chen/racial_disparities_at_police_stopes_in_the_us/main/data/ky_louisville_2020_04_01.csv')
 
 # Data cleaning and munging 
 # Select needed variables, filter out NA values
@@ -304,7 +304,7 @@ Since the dependent variable is probability, I considered multiple ways of condu
 
 ## External Validity (Robustness Check)
 ```{r, echo=FALSE, fig.pos="H"}
-dfwa <- read_csv('https://media.githubusercontent.com/media/xibei-chen/da2-coding1_term_project/main/data/wa_statewide.csv')
+dfwa <- read_csv('https://media.githubusercontent.com/media/xibei-chen/racial_disparities_at_police_stopes_in_the_us/main/data/wa_statewide.csv')
 # reg10: preferred model (8) applied to Washington statewide
 reg10 <- feols( get_searched ~ subject_b + subject_female + officer_nw + officer_female, data = dfwa , vcov = 'hetero' )
 
