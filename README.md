@@ -7,9 +7,6 @@ The aim of this project is to take a closer look into racial disparities at poli
 ## Data
 To achieve the aim of this project, I specifically picked the data set for Louisville, where data for all the other control variables that I am interested in are also available. The data set includes data of all the traffic stops from 2015-01-01 to 2018-01-28 in Louisville, KY. I did some data cleaning and munging to filter out all the NA values, focus only on sample with drivers either black or white, categorize officers as white and non-white and consider both *frisk performed* and *search conducted* as *get searched*.
 
-## Models and Interpretation
-The pattern of association between y and the only one continuous variable subject_age (see graph in Appendix) seems close to be linear, so there is no need to use splines or polynomials. Therefore, I start building regression models.
-
 ## External Validity (Robustness Check)
 The second data set I used includes data of all the traffic stops with drivers being either black or white from 2009-01-01 to 2015-12-31 in Washington Statewide. The slope coefficient for driver's race is similar to our model for Louisville previously. This suggests that for other time intervals and other regions in the US, the external validity of the model is quite high, we might expect similar slope coefficient for driver's race.
 
