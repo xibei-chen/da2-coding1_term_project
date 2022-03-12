@@ -1,4 +1,4 @@
-# Explore Racial Disparities at Police Stopes in th US
+# Explore Racial Disparities at Police Stops in th US
 This is a project for my studies. The aim of the project is to find patterns of association between probability to get searched at police stops and subject's race and other explanatory variables subject's sex and age and officer's race and sex, and their interactions. The sample used for this analysis is police stops in Louisville from 2015 January to 2018 January. 
 
 You can find more details of modelling and visuals in the script and report. 
